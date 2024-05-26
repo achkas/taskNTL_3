@@ -1,95 +1,228 @@
-﻿ //Задача 3.cpp 
-
-#include <map>
-#include <string>
+﻿#include <string>
 #include <iostream>
+#include <fstream>
+#include <exception>
+#include <stdexcept>
+#include <windows.h>
 
 
 
-class VeryHeavyDatabase {
-public:
-    std::string GetData(const std::string& key) const noexcept {
-        return "Very Big Data String: " + key;
-    }
+enum class MessageType
+{
+	Warning,
+	Error,
+	FatalError,
+	Unknown
 };
 
-
-
-class CacheProxyDB : VeryHeavyDatabase {
-public:
-
-    explicit CacheProxyDB(VeryHeavyDatabase* real_object) : real_db_(real_object) { std::cout << "создан прокси\n"; }
-    std::string GetData(const std::string& key) noexcept {
-        if (cache_.find(key) == cache_.end()) {
-            std::cout << "Get from real object\n";
-            cache_[key] = real_db_->GetData(key);
-        }
-        else {
-            std::cout << "Get from cache\n";
-        }
-        return cache_.at(key);
-    }  
-
+class LogMessage
+{
 private:
-    std::map<std::string, std::string> cache_;
-    VeryHeavyDatabase* real_db_;
+	MessageType m_type;
+	std::string m_message;
 
-};
-
-
-
-
-class TestDB : VeryHeavyDatabase {
 public:
-    explicit TestDB(VeryHeavyDatabase* real_object) : real_db_(real_object) {}
-    std::string GetData(const std::string& key) noexcept {
-        return "test_data\n";
-    }
-private:
-    VeryHeavyDatabase* real_db_;
+	LogMessage(MessageType type, const std::string& message) : m_type(type), m_message(message) {}	
+
+	MessageType type() const
+	{
+		return m_type;
+	}
+
+	const std::string& message() const
+	{
+		return m_message;
+	}
+
+	const bool operator == (const LogMessage& other)
+	{
+		return this->m_type == other.m_type;
+	}
+
 };
 
-class OneShotDB : VeryHeavyDatabase {
+
+
+class HandlerLogMessag 
+{
 public:
-    explicit OneShotDB(VeryHeavyDatabase* real_object, size_t shots) : real_db_(real_object), shots_(shots) {}
-    std::string GetData(const std::string& key) noexcept
-    {
-        if (num_calls_ != shots_)
-        {
-            num_calls_++;
-            return "value\n";
-        }
-        else
-        {
-            return "error\n";
-        }
-    }
+	virtual void setHandler(HandlerLogMessag* handler) = 0;
 
-private:
-    VeryHeavyDatabase* real_db_;
-    size_t shots_{ 0 };
-    int num_calls_{ 0 };
+	virtual void handleMessage(const LogMessage& message) = 0;
 };
 
-int main() {
+class WarningHandler : public HandlerLogMessag//1 должен напечатать сообщение в консоль
+{
+private:
+	HandlerLogMessag* nextHandler{};
 
-    VeryHeavyDatabase real_db = VeryHeavyDatabase();
-    CacheProxyDB cached_db = CacheProxyDB(std::addressof(real_db));
-    TestDB test_db = TestDB(std::addressof(real_db));
-    OneShotDB limit_db = OneShotDB(std::addressof(real_db), 2);
+public:
+	void
+		setHandler(HandlerLogMessag* handler) override
+	{
+		nextHandler = handler;
+	}
 
-    std::cout << cached_db.GetData("key") << std::endl;
-    std::cout << cached_db.GetData("key") << std::endl;
-    std::cout << test_db.GetData("key") << std::endl;
-    std::cout << limit_db.GetData("key") << std::endl;
-    std::cout << limit_db.GetData("key") << std::endl;
-    std::cout << limit_db.GetData("key") << std::endl;
+	void handleMessage(const LogMessage& message) override
+	{
+		LogMessage* ref_Warning = new LogMessage(MessageType::Warning, " ");		
 
-    return 0;
+		if (message == *ref_Warning)
+		{
+			std::cout << "Warning: " + message.message() << std::endl;
+		}
+		else if (nextHandler != nullptr)
+		{
+			nextHandler->handleMessage(message);
+		}
+
+		delete ref_Warning;
+	}
+};
+
+class ErrorHandler : public HandlerLogMessag//2 должен записать её в файл по указанному пути.
+{
+private:
+	HandlerLogMessag* nextHandler{};
+
+public:
+	void
+		setHandler(HandlerLogMessag* handler) override
+	{
+		nextHandler = handler;
+	}
+
+	void handleMessage(const LogMessage& message) override
+	{
+		LogMessage* ref_Error = new LogMessage(MessageType::Error, " ");		
+
+		if (message == *ref_Error)
+		{
+			//std::cout << "Ошибка " << std::endl;
+			std::ofstream rf;
+			rf.open("Текст.txt");
+			if (!rf.is_open()) { std::cout << "not open!"; }
+			rf << "Error: " + message.message() << std::endl;
+			rf.close();
+		}
+		else if (nextHandler != nullptr)
+		{
+			nextHandler->handleMessage(message);
+		}
+
+		delete ref_Error;
+	}
+};
+
+class FatalerrorHandler : public HandlerLogMessag
+	//3 должен выбросить исключение с текстом сообщения,
+	//  потому что предполагается, что программа должна прекратить выполнение после возникновения фатальной ошибки.
+{
+private:
+	HandlerLogMessag* nextHandler{};
+
+public:
+	void
+		setHandler(HandlerLogMessag* handler) override
+	{
+		nextHandler = handler;
+	}
+
+	void handleMessage(const LogMessage& message) override
+	{
+		LogMessage* ref_Fatalerror = new LogMessage(MessageType::FatalError, " ");
+		
+		try
+		{
+			if (message == *ref_Fatalerror)
+			{				
+				throw std::logic_error("FatalError: " + message.message() + "\n");
+			}
+			else if (nextHandler != nullptr)
+			{
+				nextHandler->handleMessage(message);
+			}
+		}
+
+		catch (std::exception& e)
+		{
+			std::cout << e.what();
+			exit(1);
+		}
+
+		delete ref_Fatalerror;
+
+	}
+};
+
+class UnknownmessageHandler : public HandlerLogMessag//4 выбросить исключение с текстом о необработанном сообщении
+{
+private:
+	HandlerLogMessag* nextHandler{};
+
+public:
+	void
+		setHandler(HandlerLogMessag* handler) override
+	{
+		nextHandler = handler;
+	}
+
+	void handleMessage(const LogMessage& message) override
+	{
+		LogMessage* ref_Unknownmessage = new LogMessage(MessageType::Unknown, " ");		
+
+		try
+		{
+			if (message == *ref_Unknownmessage)
+			{				
+				throw std::logic_error("Unknown_message: " + message.message() + "\n");
+			}
+			else if (nextHandler != nullptr)
+			{
+				nextHandler->handleMessage(message);
+			}
+		}
+
+		catch (std::exception& e)
+		{
+			std::cout << e.what();
+		}
+
+		delete ref_Unknownmessage;
+	}
+};
+
+
+int main()
+{
+	setlocale(LC_ALL, "ru");
+	SetConsoleCP(1251);
+	SetConsoleOutputCP(1251);
+	
+	LogMessage war(MessageType::Warning, "Это предупреждение");
+	LogMessage err(MessageType::Error, "Это ошибка");
+	LogMessage fat_err(MessageType::FatalError, "Это критическая ошибка");
+	LogMessage unk(MessageType::Unknown, "Это неизвестный тип");
+
+
+	HandlerLogMessag* warning = new WarningHandler;
+	HandlerLogMessag* error = new ErrorHandler;
+	HandlerLogMessag* fatal_error = new FatalerrorHandler;
+	HandlerLogMessag* unknown_message = new UnknownmessageHandler;
+
+	warning->setHandler(error);
+	error->setHandler(fatal_error);
+	fatal_error->setHandler(unknown_message);
+
+	warning->handleMessage(war);
+	warning->handleMessage(err);	 
+	warning->handleMessage(unk);
+    warning->handleMessage(fat_err);
+
+	delete fatal_error;
+	delete error;
+	delete warning;
+	delete unknown_message;
+
+		return 0;
 }
-
-
- 
-
-
-
